@@ -136,10 +136,17 @@ class Enemy extends GameObject {
         this.height = 50;
         this.type = 'Enemy';
         let id = setInterval(() => {
-            if (this.y < canvas.height - this.height) {
-                this.y += 5;
+            if (!this.dead) {
+                this.y = this.y < canvas.height - this.height ? this.y + 5 : this.y;
+                if (this.y >= canvas.height - this.height) {
+                    this.dead = true;
+                    eventEmitter.emit(Messages.ENEMY_OUT_OF_BOUNDS); // TODO: handle enemy out of bounds
+                }
+            // }
+            // if (this.y < canvas.height - this.height) {
+            //     this.y += 5;
             } else {
-                console.log(`Stopped at ${this.y}`)
+                // console.log(`Stopped at ${this.y}`)
                 clearInterval(id);
             }
         }, 300);
@@ -169,6 +176,22 @@ class Laser extends GameObject {
 }
 
 
+/**
+ * Explosion object that appears when an enemy is shot
+ */
+class Explosion extends GameObject {
+    constructor(x, y, img = explosionRed) {
+        super(x, y);
+        this.img = img;
+        this.type = 'Explosion';
+        this.width = 56 * 2;
+        this.height = 54 * 2;
+        setTimeout(() => {
+            this.dead = true;
+        }, 300);
+    }
+}
+
 // VARIABLES
 // Event emitter messages
 const Messages = {
@@ -182,12 +205,15 @@ const Messages = {
     COLLISION_ENEMY_HERO: "COLLISION_ENEMY_HERO",
     GAME_END_WIN: "GAME_END_WIN",
     GAME_END_LOSS: "GAME_END_LOSS",
+    ENEMY_OUT_OF_BOUNDS: "ENEMY_OUT_OF_BOUNDS",
 };
 
 let heroImg,
     enemyImg,
     laserImg,
     lifeImg,
+    explosionRed,
+    explosionGreen,
     canvas, ctx,
     gameObjects = [],
     hero,
@@ -258,10 +284,10 @@ function loadTexture(path) {
  * then add each to gameObjects[].
  */
 function createEnemies() {
-    const MONSTER_TOTAL = 5;
-    const MONSTER_WIDTH = MONSTER_TOTAL * 98;
-    const START_X = (canvas.width - MONSTER_WIDTH) / 2;
-    const STOP_X = START_X + MONSTER_WIDTH;
+    const ENEMY_TOTAL = 5;
+    const ENEMY_WIDTH = ENEMY_TOTAL * 98;
+    const START_X = (canvas.width - ENEMY_WIDTH) / 2;
+    const STOP_X = START_X + ENEMY_WIDTH;
 
     for (let x = START_X; x < STOP_X; x += 98) {
         for (let y = 0; y < 50 * 5; y += 50) {
@@ -328,11 +354,7 @@ function drawGameObjects() {
 function drawLife() {
     const START_POS = canvas.width - 180;
     for (let i = 0; i < hero.life; i++) {
-        ctx.drawImage(
-            lifeImg,
-            START_POS + (45 * (i + 1)),
-            canvas.height - 37
-        );
+        ctx.drawImage(lifeImg, START_POS + (45 * (i + 1)), canvas.height - 37);
     }
 }
 
@@ -454,10 +476,11 @@ function initGame() {
     });
     
     // mark enemies as dead when hit with laser and add points
-    eventEmitter.on(Messages.COLLISION_ENEMY_LASER, (_, { first, second }) => {
-        first.dead = true;
-        second.dead = true;
+    eventEmitter.on(Messages.COLLISION_ENEMY_LASER, (_, { first: laser, second: enemy }) => {
+        laser.dead = true;
+        enemy.dead = true;
         hero.incrementScore();
+        gameObjects.push(new Explosion(enemy.x, enemy.y));
         
         // if all enemies dead -> win the game!
         if (allEnemiesDead()) {
@@ -468,14 +491,16 @@ function initGame() {
     // mark enemy as dead when collides with hero, remove a hero life
     eventEmitter.on(Messages.COLLISION_ENEMY_HERO, (_, { enemy }) => {
         enemy.dead = true;
-        hero.decrementLife();  // redraw hero?
+        hero.decrementLife();
         
         // check if lives remaining, if no -> game lost
         if (isHeroDead()) {
             eventEmitter.emit(Messages.GAME_END_LOSS);
+            gameObjects.push(new Explosion(hero.x, hero.y, explosionGreen));
         } else if (allEnemiesDead()) {
             eventEmitter.emit(Messages.GAME_END_WIN);
         } 
+        gameObjects.push(new Explosion(enemy.x, enemy.y));
     });
     
     eventEmitter.on(Messages.GAME_END_WIN, () => {
@@ -544,6 +569,8 @@ window.onload = async () => {
     heroImg = await loadTexture("assets/player.png");
     laserImg = await loadTexture("assets/laserRed.png");
     lifeImg = await loadTexture("assets/life.png");
+    explosionRed = await loadTexture("assets/explosionRed.png");
+    explosionGreen = await loadTexture("assets/explosionGreen.png");
     
     initGame();
     

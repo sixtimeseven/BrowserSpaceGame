@@ -1,6 +1,3 @@
-// global game loop variable
-let gameLoopId;
-
 /**
  * Event emitter to publish & subscribe to messages
  */
@@ -22,11 +19,6 @@ class EventEmitter {
         if (this.listeners[message]) {
             this.listeners[message].forEach((l) => l(message, payload));
         }
-    }
-    
-    // clear all emitters
-    clear() {
-        this.listeners = {};
     }
 }
 
@@ -73,54 +65,6 @@ class Hero extends GameObject {
         this.height = 75;
         this.type = 'Hero';
         this.speed = { x: 0, y: 0 };
-        this.coolDown = 0;
-        this.life = 3;
-        this.score = 0;
-    }
-
-    /**
-     * Fires the hero's laser. Starts a timer for laser cooldown. 
-     * Laser requires 500ms to cool down.
-     */
-    fire() {
-        gameObjects.push(new Laser(this.x + 45, this.y - 10));
-        this.coolDown = 500;
-        
-        let id = setInterval(() => {
-            if (this.coolDown > 0) {
-                this.coolDown -= 100;
-                if (this.coolDown === 0) {
-                    clearInterval(id);
-                }
-            } else {
-                clearInterval(id);
-            }
-        }, 200);
-    }
-
-    /**
-     * True if laser has cooled down and can be fired.
-     * @returns {boolean}
-     */
-    canFire() {
-        return this.coolDown === 0;
-    }
-
-    /**
-     * Remove a life from the players remaining lives.
-     */
-    decrementLife() {
-        this.life--;
-        if (this.life === 0) {
-            this.dead = true;
-        }
-    }
-
-    /**
-     * Add 100 points for every laser collision with an enemy
-     */
-    incrementScore() {
-        this.score += 100;
     }
 }
 
@@ -135,6 +79,7 @@ class Enemy extends GameObject {
         this.width = 98;
         this.height = 50;
         this.type = 'Enemy';
+        this.img = enemyImg;
         let id = setInterval(() => {
             if (!this.dead) {
                 this.y = this.y < canvas.height - this.height ? this.y + 5 : this.y;
@@ -192,6 +137,122 @@ class Explosion extends GameObject {
     }
 }
 
+
+/**
+ * Game holds player's score, lives, and sub logic
+ */
+class Game {
+    constructor() {
+        this.score = 0;
+        this.life = 3;
+        this.end = false;
+        this.ready = false;
+        
+        // if enemy reaches bottom of canvas -> hero dies!
+        eventEmitter.on(Messages.ENEMY_OUT_OF_BOUNDS, () => {
+            hero.dead = true;
+        });
+        
+        // laser hits an enemy: kill enemy, make an explosion, add 100 points to score
+        eventEmitter.on(Messages.COLLISION_ENEMY_LASER, (_, { first: laser, second: enemy }) => {
+            laser.dead = true;
+            enemy.dead = true;
+            game.score += 100;
+            
+            gameObjects.push(new Explosion(enemy.x, enemy.y));
+        });
+        
+        // enemy hits hero: kill enemy, lose a life, check for hero death, make explosions
+        eventEmitter.on(Messages.COLLISION_ENEMY_HERO, (_, { enemy: en, id }) => {
+            game.life--;
+            if (game.life === 0) {
+                hero.dead = true;
+                gameObjects.push(new Explosion(hero.x, hero.y, explosionGreen));
+                // clearInterval(gameLoopId);
+                eventEmitter.emit(Messages.GAME_END_LOSS, id);
+            } 
+            en.dead = true;
+            hero.img = heroDamagedImg;
+            gameObjects.push(new Explosion(en.x, en.y));
+        });
+        
+        // game over: loser
+        eventEmitter.on(Messages.GAME_END_LOSS, (_, gameLoopId) => {
+            game.end = true;
+            clearInterval(gameLoopId);
+            setTimeout(() => {
+                redrawCanvas();
+                drawScore();
+                displayMessage(`Don't panic. You died. Press ENTER to start again.`, 'red');
+            }, 200);
+        });
+        
+        // game over: winner
+        eventEmitter.on(Messages.GAME_END_WIN, (_, gameLoopId) => {
+            game.end = true;
+            clearInterval(gameLoopId);
+            setTimeout(() => {
+                redrawCanvas();
+                drawScore();
+                displayMessage(`You did it!! Press ENTER to start a new game.`, 'green');
+            }, 200);
+        });
+        
+        // fire ze missiles
+        eventEmitter.on(Messages.HERO_FIRE, () => {
+            if (coolDown === 0) {
+                let laser = new Laser(hero.x + 45, hero.y - 30);
+                gameObjects.push(laser);
+                cooling();
+            }
+        });
+        
+        // move left on left arrow key down
+        eventEmitter.on(Messages.HERO_SPEED_LEFT, () => {
+            hero.speed.x = -10;
+            hero.img = heroLeftImg;
+        });
+        
+        // move right on right arrow key down
+        eventEmitter.on(Messages.HERO_SPEED_RIGHT, () => {
+            hero.speed.x = 10;
+            hero.img = heroRightImg;
+        });
+        
+        // reset hero speed and hero image
+        eventEmitter.on(Messages.HERO_SPEED_ZERO, () => {
+            hero.speed = { x: 0, y: 0 };
+            hero.img = game.life === 3 ? heroImg : heroDamagedImg;
+        });
+        
+        // move up if not at top of canvas
+        eventEmitter.on(Messages.KEY_EVENT_UP, () => {
+            hero.y = hero.y > 0 ? hero.y - 5 : hero.y;
+        });
+        
+        // move down if not at bottom of canvas
+        eventEmitter.on(Messages.KEY_EVENT_DOWN, () => {
+            hero.y = hero.y < canvas.height - hero.height ? hero.y + 5 : hero.y;
+        });
+        
+        // move left if not at canvas edge
+        eventEmitter.on(Messages.KEY_EVENT_LEFT, () => {
+            hero.x = hero.x > 0 ? hero.x - 10 : hero.x;
+        });
+        
+        // move right if not at canvas edge
+        eventEmitter.on(Messages.KEY_EVENT_RIGHT, () => {
+            hero.x = hero.x < canvas.width - hero.width ? hero.x + 10 : hero.x;
+        });
+
+        eventEmitter.on(Messages.GAME_START, () => {
+            if (game.ready && game.end) {
+                runGame();
+            }
+        });
+    }
+}
+
 // VARIABLES
 // Event emitter messages
 const Messages = {
@@ -199,8 +260,13 @@ const Messages = {
     KEY_EVENT_DOWN: "KEY_EVENT_DOWN",
     KEY_EVENT_LEFT: "KEY_EVENT_LEFT",
     KEY_EVENT_RIGHT: "KEY_EVENT_RIGHT",
-    KEY_EVENT_SPACE: "KEY_EVENT_SPACE",
-    KEY_EVENT_ENTER: "KEY_EVENT_ENTER",
+    // KEY_EVENT_SPACE: "KEY_EVENT_SPACE",
+    // KEY_EVENT_ENTER: "KEY_EVENT_ENTER",
+    GAME_START: "GAME_START",   // replaces KEY_EVENT_ENTER
+    HERO_FIRE: "HERO_FIRE",     // replaces KEY_EVENT_SPACE
+    HERO_SPEED_LEFT: "HERO_SPEED_LEFT",
+    HERO_SPEED_RIGHT: "HERO_SPEED_RIGHT",
+    HERO_SPEED_ZERO: "HERO_SPEED_ZERO",
     COLLISION_ENEMY_LASER: "COLLISION_ENEMY_LASER",
     COLLISION_ENEMY_HERO: "COLLISION_ENEMY_HERO",
     GAME_END_WIN: "GAME_END_WIN",
@@ -208,60 +274,25 @@ const Messages = {
     ENEMY_OUT_OF_BOUNDS: "ENEMY_OUT_OF_BOUNDS",
 };
 
+const eventEmitter = new EventEmitter();
+const hero = new Hero(0, 0);
+
+let gameLoopId;
+let gameObjects = [];
 let heroImg,
     enemyImg,
     laserImg,
     lifeImg,
     explosionRed,
     explosionGreen,
-    canvas, ctx,
-    gameObjects = [],
-    hero,
-    eventEmitter = new EventEmitter();
+    heroLeftImg,
+    heroRightImg,
+    heroDamagedImg,
+    canvas, ctx;
+let coolDown = 0;
+const game = new Game();
 
-
-// EVENTS
-
-/**
- * Prevent default actions (like scrolling) for arrow keys and the space bar
- */
-let onKeyDown = function (e) {
-    console.log(e.key);
-    switch (e.key) {
-        case "ArrowDown":
-        case "ArrowUp":
-        case "ArrowLeft":
-        case "ArrowRight":
-        case " ":
-            e.preventDefault(); // shut off default behavior of arrows & space
-            break;
-        default:
-            break;  // do not block other keys
-    }
-};
-
-// event listener to prevent default key functions
-window.addEventListener("keydown", onKeyDown);
-
-// Event listener for keyup events to send to event emitter
-window.addEventListener("keyup", (evt) => {
-    if (evt.key === "ArrowUp") {
-        eventEmitter.emit(Messages.KEY_EVENT_UP);
-    } else if (evt.key === "ArrowDown") {
-        eventEmitter.emit(Messages.KEY_EVENT_DOWN);
-    } else if (evt.key === "ArrowLeft") {
-        eventEmitter.emit(Messages.KEY_EVENT_LEFT);
-    } else if (evt.key === "ArrowRight") {
-        eventEmitter.emit(Messages.KEY_EVENT_RIGHT);
-    } else if (evt.key === " ") {
-        eventEmitter.emit(Messages.KEY_EVENT_SPACE);
-    } else if (evt.key === "Enter") {
-        eventEmitter.emit(Messages.KEY_EVENT_ENTER);
-    }
-});
-
-
-// GAME FUNCTIONS
+// CANVAS & WINDOW FUNCTIONS
 
 /**
  * Load textures for game objects asynchronously.
@@ -280,58 +311,6 @@ function loadTexture(path) {
 
 
 /**
- * Create enemy ships in a grid at the top of the screen
- * then add each to gameObjects[].
- */
-function createEnemies() {
-    const ENEMY_TOTAL = 5;
-    const ENEMY_WIDTH = ENEMY_TOTAL * 98;
-    const START_X = (canvas.width - ENEMY_WIDTH) / 2;
-    const STOP_X = START_X + ENEMY_WIDTH;
-
-    for (let x = START_X; x < STOP_X; x += 98) {
-        for (let y = 0; y < 50 * 5; y += 50) {
-            const enemy = new Enemy(x, y);
-            enemy.img = enemyImg;
-            gameObjects.push(enemy);
-        }
-    }
-}
-
-
-/**
- * Create the hero object and position it in the middle of canvas
- * then add it to gameObjects[]
- */
-function createHero() {
-    hero = new Hero(
-        canvas.width / 2 - 45,
-        canvas.height - canvas.height / 4
-    );
-    hero.img = heroImg;
-    gameObjects.push(hero);
-}
-
-/**
- * Checks if the hero has any remaining lives.
- * @returns {boolean}
- */
-function isHeroDead() {
-    return hero.life <= 0;
-}
-
-
-/**
- * Checks if all enemies have been eliminated.
- * @returns {boolean}
- */
-function allEnemiesDead() {
-    const enemies = gameObjects.filter((go) => go.type === "Enemy" && !go.dead);
-    return enemies.length === 0;
-}
-
-
-/**
  * Redraws the canvas with black
  */
 function redrawCanvas() {
@@ -341,7 +320,7 @@ function redrawCanvas() {
 }
 
 /**
- * draw all game objects from the gameObjects array
+ * Draw all game objects from the gameObjects array
  */
 function drawGameObjects() {
     gameObjects.forEach(go => go.draw(ctx));
@@ -353,10 +332,11 @@ function drawGameObjects() {
  */
 function drawLife() {
     const START_POS = canvas.width - 180;
-    for (let i = 0; i < hero.life; i++) {
+    for (let i = 0; i < game.life; i++) {
         ctx.drawImage(lifeImg, START_POS + (45 * (i + 1)), canvas.height - 37);
     }
 }
+
 
 /**
  * Draw player score to the screen
@@ -365,7 +345,7 @@ function drawScore() {
     ctx.font = "30px Courier";
     ctx.fillStyle = "green";
     ctx.textAlign = "left";
-    drawText("Score: " + hero.score, 10, canvas.height - 20);
+    drawText("Score: " + game.score, 10, canvas.height - 20);
 }
 
 
@@ -393,13 +373,173 @@ function displayMessage(message, color = 'yellow') {
 }
 
 
+// KEY EVENTS
+
+// Prevent default actions (like scrolling) for arrow keys and the space bar
+let onKeyDown = function (e) {
+    console.log(e.key);
+    switch (e.key) {
+        case "ArrowDown":
+        case "ArrowUp":
+        case "ArrowLeft":
+        case "ArrowRight":
+        case " ":
+            e.preventDefault(); // shut off default behavior of arrows & space
+            break;
+        default:
+            break;              // do not block other keys
+    }
+};
+
+window.addEventListener("keydown", onKeyDown);
+// use key down on left and right arrow for movement
+window.addEventListener('keydown', (e) => {
+    switch (e.key) {
+        case "ArrowLeft":
+            eventEmitter.emit(Messages.HERO_SPEED_LEFT);
+            break;
+        case "ArrowRight":
+            eventEmitter.emit(Messages.HERO_SPEED_RIGHT);
+            break;
+    }
+});
+
+// Event listener for keyup events to send messages
+window.addEventListener("keyup", (evt) => {
+    // reset hero speed on keyup
+    eventEmitter.emit(Messages.HERO_SPEED_ZERO);
+    if (evt.key === "ArrowUp") {
+        eventEmitter.emit(Messages.KEY_EVENT_UP);
+    } else if (evt.key === "ArrowDown") {
+        eventEmitter.emit(Messages.KEY_EVENT_DOWN);
+    } else if (evt.key === "ArrowLeft") {
+        eventEmitter.emit(Messages.KEY_EVENT_LEFT);
+    } else if (evt.key === "ArrowRight") {
+        eventEmitter.emit(Messages.KEY_EVENT_RIGHT);
+    } else if (evt.key === " ") {
+        eventEmitter.emit(Messages.HERO_FIRE);
+    } else if (evt.key === "Enter") {
+        eventEmitter.emit(Messages.GAME_START);
+    }
+});
+
+
+// GAME LOGIC FUNCTIONS
+
+/**
+ * Create enemy ships in a grid at the top of the screen
+ * then add each to gameObjects[].
+ */
+function createEnemies() {
+    const ENEMY_TOTAL = 5;
+    const ENEMY_WIDTH = ENEMY_TOTAL * 98;
+    const START_X = (canvas.width - ENEMY_WIDTH) / 2;
+    const STOP_X = START_X + ENEMY_WIDTH;
+
+    for (let x = START_X; x < STOP_X; x += 98) {
+        for (let y = 0; y < 50 * 5; y += 50) {
+            gameObjects.push(new Enemy(x, y));
+        }
+    }
+}
+
+
+/**
+ * Create the hero object and position it in the middle of canvas
+ * then add it to gameObjects[]
+ */
+function createHero() {
+    hero.dead = false;
+    hero.img = heroImg;
+    hero.x = canvas.width / 2;
+    hero.y = (canvas.height / 4) * 3;
+    gameObjects.push(hero);
+}
+
+
+/**
+ * Starts a cool down period for the laser
+ */
+function cooling() {
+    coolDown = 500;
+    let id = setInterval(() => {
+        coolDown -= 100;
+        if (coolDown === 0) {
+            clearInterval(id);
+        }
+    }, 100);
+}
+
+
+/**
+ * Checks the state of enemies for collisions with lasers & hero, filters out the dead.
+ * Updates the hero's position from keydown events.
+ * @param gameLoopId
+ */
+function checkGameState(gameLoopId) {
+    const enemies = gameObjects.filter((go) => go.type === 'Enemy');
+    
+    
+    // update hero position
+    if (hero.speed.x !== 0) {
+        hero.x += hero.speed.x;
+    }
+    
+    // check for laser collisions
+    const lasers = gameObjects.filter((go) => go.type === 'Laser');
+    lasers.forEach((laser) => {
+        enemies.forEach((en) => {
+            if (isCollision(laser.rectFromGameObject(), en.rectFromGameObject())) {
+                eventEmitter.emit(Messages.COLLISION_ENEMY_LASER, { first: laser, second: en });
+            }
+        });
+    });
+    
+    // hero & enemy collision
+    enemies.forEach((en) => {
+        if (isCollision(en.rectFromGameObject(), hero.rectFromGameObject())) {
+            eventEmitter.emit(Messages.COLLISION_ENEMY_HERO, { enemy: en, gameLoopId })
+        }
+    });
+
+    // check hero died or all enemies dead
+    if (hero.dead) {
+        eventEmitter.emit(Messages.GAME_END_LOSS, gameLoopId);
+    } else if (enemies.length === 0) {
+        eventEmitter.emit(Messages.GAME_END_WIN);
+    }
+    
+    // filter out the dead
+    gameObjects = gameObjects.filter((go) => !go.dead);
+}
+
+
+function runGame() {
+    gameObjects = [];
+    game.life = 3;
+    game.score = 0;
+    game.end = false;
+    
+    createEnemies();
+    createHero();
+    
+    gameLoopId = setInterval(() => {
+        redrawCanvas();
+        drawScore();
+        drawLife();
+        checkGameState(gameLoopId);
+        drawGameObjects();
+    }, 100);
+}
+
+
 /**
  * Check for collisions between rectangular GameObjects
  * @param r1 {Object} A rectangle representation of a GameObject
  * @param r2 {Object} A rectangle representation of a GameObject to compare to r1
  * @returns {boolean}
  */
-function intersectRect(r1, r2) {
+function isCollision(r1, r2) {
     return !(r2.left > r1.right ||
             r2.right < r1.left ||
             r2.top > r1.bottom ||
@@ -407,153 +547,6 @@ function intersectRect(r1, r2) {
     );
 }
 
-
-/**
- * Test game objects for collisions
- */
-function updateGameObjects() {
-    const enemies = gameObjects.filter(go => go.type === 'Enemy');
-    const lasers = gameObjects.filter((go) => go.type === 'Laser');
-    
-    // laser collision
-    lasers.forEach((laser) => {
-        enemies.forEach((enemy) => {
-            if (intersectRect(laser.rectFromGameObject(), enemy.rectFromGameObject())) {
-                eventEmitter.emit(
-                    Messages.COLLISION_ENEMY_LASER, 
-                    { first: laser, second: enemy }
-                );
-            }
-        });
-    });
-    
-    // hero & enemy collisions
-    enemies.forEach((enemy) => {
-        const heroRect = hero.rectFromGameObject();
-        if (intersectRect(heroRect, enemy.rectFromGameObject())) {
-            eventEmitter.emit(Messages.COLLISION_ENEMY_HERO, { enemy });
-        }
-    });
-    
-    // filter out dead objects
-    gameObjects = gameObjects.filter(go => !go.dead);
-}
-
-/**
- * Initialize the game, create enemies & hero,
- * set up event emitters for key up
- */
-function initGame() {
-    gameObjects = [];
-    createEnemies();
-    createHero();
-
-    eventEmitter.on(Messages.KEY_EVENT_ENTER, () => {
-        resetGame();
-    });
-    
-    eventEmitter.on(Messages.KEY_EVENT_UP, () => {
-        hero.y -= 5;
-    });
-
-    eventEmitter.on(Messages.KEY_EVENT_DOWN, () => {
-        hero.y += 5;
-    });
-
-    eventEmitter.on(Messages.KEY_EVENT_LEFT, () => {
-        hero.x -= 20;
-    });
-
-    eventEmitter.on(Messages.KEY_EVENT_RIGHT, () => {
-        hero.x += 20;
-    });
-
-    // On space key, check if weapon is cooled down before firing
-    eventEmitter.on(Messages.KEY_EVENT_SPACE, () => {
-        if (hero.canFire()) {
-            hero.fire();
-        }
-    });
-    
-    // mark enemies as dead when hit with laser and add points
-    eventEmitter.on(Messages.COLLISION_ENEMY_LASER, (_, { first: laser, second: enemy }) => {
-        laser.dead = true;
-        enemy.dead = true;
-        hero.incrementScore();
-        gameObjects.push(new Explosion(enemy.x, enemy.y));
-        
-        // if all enemies dead -> win the game!
-        if (allEnemiesDead()) {
-            eventEmitter.emit(Messages.GAME_END_WIN);
-        }
-    });
-    
-    // mark enemy as dead when collides with hero, remove a hero life
-    eventEmitter.on(Messages.COLLISION_ENEMY_HERO, (_, { enemy }) => {
-        enemy.dead = true;
-        hero.decrementLife();
-        
-        // check if lives remaining, if no -> game lost
-        if (isHeroDead()) {
-            eventEmitter.emit(Messages.GAME_END_LOSS);
-            gameObjects.push(new Explosion(hero.x, hero.y, explosionGreen));
-        } else if (allEnemiesDead()) {
-            eventEmitter.emit(Messages.GAME_END_WIN);
-        } 
-        gameObjects.push(new Explosion(enemy.x, enemy.y));
-    });
-    
-    eventEmitter.on(Messages.GAME_END_WIN, () => {
-        endGame(true);
-    });
-    
-    eventEmitter.on(Messages.GAME_END_LOSS, () => {
-        endGame(false);
-    });
-    
-}
-
-
-/**
- * When the player is out of lives or all enemy ships are destroyed, 
- * display the appropriate message.
- * @param win {Boolean} True if the player won the game, false otherwise.
- */
-function endGame(win) {
-    clearInterval(gameLoopId);
-    
-    // set a delay to ensure all draws are finished
-    setTimeout(() => {
-        // ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // ctx.fillStyle = 'black';
-        // ctx.fillRect(0, 0, canvas.width, canvas.height);
-        redrawCanvas();
-        if (win) {
-            displayMessage("Victory! Pew pew... Press ENTER to start a new game!", 'green');
-        } else {
-            displayMessage("You died!!! Press ENTER to start a new game!");
-        }
-    }, 200);
-}
-
-
-/**
- * Reset the game
- */
-function resetGame() {
-    if (gameLoopId) {
-        clearInterval(gameLoopId);
-        eventEmitter.clear();
-        initGame();
-        gameLoopId = setInterval(() => {
-            redrawCanvas();
-            drawScore();
-            drawLife();
-            updateGameObjects();
-            drawGameObjects();
-        }, 100);
-    }
-}
 
 /**
  * When the window loads, initialize the game and set up game loop
@@ -569,26 +562,16 @@ window.onload = async () => {
     heroImg = await loadTexture("assets/player.png");
     laserImg = await loadTexture("assets/laserRed.png");
     lifeImg = await loadTexture("assets/life.png");
+    heroDamagedImg = await loadTexture("assets/playerDamaged.png");
+    heroLeftImg = await loadTexture("assets/playerLeft.png");
+    heroRightImg = await loadTexture("assets/playerRight.png");
     explosionRed = await loadTexture("assets/explosionRed.png");
     explosionGreen = await loadTexture("assets/explosionGreen.png");
     
-    initGame();
-    
-    // create game loop to redraw the canvas every 100ms
-    gameLoopId = setInterval(() => {
-        // ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // ctx.fillStyle = 'black';
-        // ctx.fillRect(0, 0, canvas.width, canvas.height);
-        redrawCanvas();
-        
-        // draw lives and score to the canvas
-        drawScore();
-        drawLife();
-        // filter out objects that have had collisions
-        updateGameObjects();
-        // draw game objects
-        drawGameObjects(ctx);
-    }, 100);
+    game.ready = true;
+    game.end = true;
+    redrawCanvas();
+    displayMessage(`* * Press ENTER to start the game!\npew pew pew * *`);
 };
 
 
@@ -610,7 +593,6 @@ window.onload = async () => {
  * 2. A comparison function to compare two rectangles
  */
 
-
 /**
  * FIRING LASERS
  * Laser fire happens after a key event, then the laser moves vertically
@@ -618,5 +600,5 @@ window.onload = async () => {
  * 2. Attach a code to a key event for laser fire.
  * 3. Create a game object for the laser when the key is pressed.
  * ALSO! Laser needs a cool down to prevent too many lasers.
- * Cool down can be implemented with a timer using a Cooldown & Weapon class.
+ * Cool down can be implemented with a timer using a Cool down & Weapon class.
  */

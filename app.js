@@ -1,3 +1,6 @@
+// global game loop variable
+let gameLoopId;
+
 /**
  * Event emitter to publish & subscribe to messages
  */
@@ -6,6 +9,7 @@ class EventEmitter {
         this.listeners = {};
     }
 
+    // subscribe to messages
     on(message, listener) {
         if (!this.listeners[message]) {
             this.listeners[message] = [];
@@ -13,10 +17,16 @@ class EventEmitter {
         this.listeners[message].push(listener);
     }
 
+    // publish a message
     emit(message, payload = null) {
         if (this.listeners[message]) {
             this.listeners[message].forEach((l) => l(message, payload));
         }
+    }
+    
+    // clear all emitters
+    clear() {
+        this.listeners = {};
     }
 }
 
@@ -35,7 +45,7 @@ class GameObject {
         this.img = undefined;
     }
     
-    // function to draw the object on the screen.
+    // draws the object to the canvas
     draw(ctx) {
         ctx.drawImage(this.img, this.x, this.y, this.width, this.height);
     }
@@ -69,7 +79,8 @@ class Hero extends GameObject {
     }
 
     /**
-     * Fires the hero's laser. Laser requires 500ms to cool down.
+     * Fires the hero's laser. Starts a timer for laser cooldown. 
+     * Laser requires 500ms to cool down.
      */
     fire() {
         gameObjects.push(new Laser(this.x + 45, this.y - 10));
@@ -78,6 +89,9 @@ class Hero extends GameObject {
         let id = setInterval(() => {
             if (this.coolDown > 0) {
                 this.coolDown -= 100;
+                if (this.coolDown === 0) {
+                    clearInterval(id);
+                }
             } else {
                 clearInterval(id);
             }
@@ -163,20 +177,24 @@ const Messages = {
     KEY_EVENT_LEFT: "KEY_EVENT_LEFT",
     KEY_EVENT_RIGHT: "KEY_EVENT_RIGHT",
     KEY_EVENT_SPACE: "KEY_EVENT_SPACE",
+    KEY_EVENT_ENTER: "KEY_EVENT_ENTER",
     COLLISION_ENEMY_LASER: "COLLISION_ENEMY_LASER",
     COLLISION_ENEMY_HERO: "COLLISION_ENEMY_HERO",
+    GAME_END_WIN: "GAME_END_WIN",
+    GAME_END_LOSS: "GAME_END_LOSS",
 };
 
 let heroImg,
     enemyImg,
     laserImg,
     lifeImg,
-    score = 0,
-    lives = 3,
     canvas, ctx,
     gameObjects = [],
     hero,
     eventEmitter = new EventEmitter();
+
+
+// EVENTS
 
 /**
  * Prevent default actions (like scrolling) for arrow keys and the space bar
@@ -196,7 +214,29 @@ let onKeyDown = function (e) {
     }
 };
 
+// event listener to prevent default key functions
+window.addEventListener("keydown", onKeyDown);
+
+// Event listener for keyup events to send to event emitter
+window.addEventListener("keyup", (evt) => {
+    if (evt.key === "ArrowUp") {
+        eventEmitter.emit(Messages.KEY_EVENT_UP);
+    } else if (evt.key === "ArrowDown") {
+        eventEmitter.emit(Messages.KEY_EVENT_DOWN);
+    } else if (evt.key === "ArrowLeft") {
+        eventEmitter.emit(Messages.KEY_EVENT_LEFT);
+    } else if (evt.key === "ArrowRight") {
+        eventEmitter.emit(Messages.KEY_EVENT_RIGHT);
+    } else if (evt.key === " ") {
+        eventEmitter.emit(Messages.KEY_EVENT_SPACE);
+    } else if (evt.key === "Enter") {
+        eventEmitter.emit(Messages.KEY_EVENT_ENTER);
+    }
+});
+
+
 // GAME FUNCTIONS
+
 /**
  * Load textures for game objects asynchronously.
  * @param path {String} The path to the image
@@ -246,6 +286,33 @@ function createHero() {
     gameObjects.push(hero);
 }
 
+/**
+ * Checks if the hero has any remaining lives.
+ * @returns {boolean}
+ */
+function isHeroDead() {
+    return hero.life <= 0;
+}
+
+
+/**
+ * Checks if all enemies have been eliminated.
+ * @returns {boolean}
+ */
+function allEnemiesDead() {
+    const enemies = gameObjects.filter((go) => go.type === "Enemy" && !go.dead);
+    return enemies.length === 0;
+}
+
+
+/**
+ * Redraws the canvas with black
+ */
+function redrawCanvas() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
 
 /**
  * draw all game objects from the gameObjects array
@@ -292,6 +359,19 @@ function drawText(message, x, y) {
 
 
 /**
+ * Display a message in the center of the screen.
+ * @param message {String} The message to display.
+ * @param color {String} The color of the message text (default yellow).
+ */
+function displayMessage(message, color = 'yellow') {
+    ctx.font = "30px monospace";
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+}
+
+
+/**
  * Check for collisions between rectangular GameObjects
  * @param r1 {Object} A rectangle representation of a GameObject
  * @param r2 {Object} A rectangle representation of a GameObject to compare to r1
@@ -314,22 +394,22 @@ function updateGameObjects() {
     const lasers = gameObjects.filter((go) => go.type === 'Laser');
     
     // laser collision
-    lasers.forEach((l) => {
-        enemies.forEach((m) => {
-            if (intersectRect(l.rectFromGameObject(), m.rectFromGameObject())) {
+    lasers.forEach((laser) => {
+        enemies.forEach((enemy) => {
+            if (intersectRect(laser.rectFromGameObject(), enemy.rectFromGameObject())) {
                 eventEmitter.emit(
                     Messages.COLLISION_ENEMY_LASER, 
-                    { first: l, second: m }
+                    { first: laser, second: enemy }
                 );
             }
         });
     });
     
     // hero & enemy collisions
-    enemies.forEach(m => {
+    enemies.forEach((enemy) => {
         const heroRect = hero.rectFromGameObject();
-        if (intersectRect(heroRect, m.rectFromGameObject())) {
-            eventEmitter.emit(Messages.COLLISION_ENEMY_HERO, { m });
+        if (intersectRect(heroRect, enemy.rectFromGameObject())) {
+            eventEmitter.emit(Messages.COLLISION_ENEMY_HERO, { enemy });
         }
     });
     
@@ -346,6 +426,10 @@ function initGame() {
     createEnemies();
     createHero();
 
+    eventEmitter.on(Messages.KEY_EVENT_ENTER, () => {
+        resetGame();
+    });
+    
     eventEmitter.on(Messages.KEY_EVENT_UP, () => {
         hero.y -= 5;
     });
@@ -355,11 +439,11 @@ function initGame() {
     });
 
     eventEmitter.on(Messages.KEY_EVENT_LEFT, () => {
-        hero.x -= 5;
+        hero.x -= 20;
     });
 
     eventEmitter.on(Messages.KEY_EVENT_RIGHT, () => {
-        hero.x += 5;
+        hero.x += 20;
     });
 
     // On space key, check if weapon is cooled down before firing
@@ -374,33 +458,77 @@ function initGame() {
         first.dead = true;
         second.dead = true;
         hero.incrementScore();
+        
+        // if all enemies dead -> win the game!
+        if (allEnemiesDead()) {
+            eventEmitter.emit(Messages.GAME_END_WIN);
+        }
     });
     
     // mark enemy as dead when collides with hero, remove a hero life
     eventEmitter.on(Messages.COLLISION_ENEMY_HERO, (_, { enemy }) => {
         enemy.dead = true;
-        hero.decrementLife();
-    })
+        hero.decrementLife();  // redraw hero?
+        
+        // check if lives remaining, if no -> game lost
+        if (isHeroDead()) {
+            eventEmitter.emit(Messages.GAME_END_LOSS);
+        } else if (allEnemiesDead()) {
+            eventEmitter.emit(Messages.GAME_END_WIN);
+        } 
+    });
+    
+    eventEmitter.on(Messages.GAME_END_WIN, () => {
+        endGame(true);
+    });
+    
+    eventEmitter.on(Messages.GAME_END_LOSS, () => {
+        endGame(false);
+    });
+    
 }
 
 
-// event listener to prevent default key functions
-window.addEventListener("keydown", onKeyDown);
+/**
+ * When the player is out of lives or all enemy ships are destroyed, 
+ * display the appropriate message.
+ * @param win {Boolean} True if the player won the game, false otherwise.
+ */
+function endGame(win) {
+    clearInterval(gameLoopId);
+    
+    // set a delay to ensure all draws are finished
+    setTimeout(() => {
+        // ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // ctx.fillStyle = 'black';
+        // ctx.fillRect(0, 0, canvas.width, canvas.height);
+        redrawCanvas();
+        if (win) {
+            displayMessage("Victory! Pew pew... Press ENTER to start a new game!", 'green');
+        } else {
+            displayMessage("You died!!! Press ENTER to start a new game!");
+        }
+    }, 200);
+}
 
-// Event listener for keyup events to send to event emitter
-window.addEventListener("keyup", (evt) => {
-    if (evt.key === "ArrowUp") {
-        eventEmitter.emit(Messages.KEY_EVENT_UP);
-    } else if (evt.key === "ArrowDown") {
-        eventEmitter.emit(Messages.KEY_EVENT_DOWN);
-    } else if (evt.key === "ArrowLeft") {
-        eventEmitter.emit(Messages.KEY_EVENT_LEFT);
-    } else if (evt.key === "ArrowRight") {
-        eventEmitter.emit(Messages.KEY_EVENT_RIGHT);
-    } else if (evt.key === " ") {
-        eventEmitter.emit(Messages.KEY_EVENT_SPACE);
+
+/**
+ * Reset the game
+ */
+function resetGame() {
+    if (gameLoopId) {
+        clearInterval(gameLoopId);
+        eventEmitter.clear();
+        initGame();
+        gameLoopId = setInterval(() => {
+            redrawCanvas();
+            drawScore();
+            drawLife();
+            updateGameObjects();
+            drawGameObjects();
+        }, 100);
     }
-});
+}
 
 /**
  * When the window loads, initialize the game and set up game loop
@@ -420,16 +548,17 @@ window.onload = async () => {
     initGame();
     
     // create game loop to redraw the canvas every 100ms
-    let gameLoopId = setInterval(() => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = 'black';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    gameLoopId = setInterval(() => {
+        // ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // ctx.fillStyle = 'black';
+        // ctx.fillRect(0, 0, canvas.width, canvas.height);
+        redrawCanvas();
         
-        // filter out objects that have had collisions
-        updateGameObjects();
         // draw lives and score to the canvas
         drawScore();
         drawLife();
+        // filter out objects that have had collisions
+        updateGameObjects();
         // draw game objects
         drawGameObjects(ctx);
     }, 100);
